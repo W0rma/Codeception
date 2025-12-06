@@ -48,6 +48,7 @@
         "codeception/module-webdriver": "*@dev",
         "codeception/util-universalframework": "*@dev",
         "doctrine/orm": "^3.3",
+        "guzzlehttp/guzzle": "^7.9.3",
         "jetbrains/phpstorm-attributes": "^1.0",
         "laravel-zero/phar-updater": "^1.4",
         "php-webdriver/webdriver": "^1.15",
