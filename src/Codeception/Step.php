@@ -28,6 +28,9 @@ abstract class Step implements Stringable
      * @var int
      */
     public const STACK_POSITION     = 3;
+
+    private const JSON_FLAGS = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
+
     public bool $executed = false;
 
     protected bool $failed   = false;
@@ -149,10 +152,7 @@ abstract class Step implements Stringable
         } elseif (is_object($argument)) {
             $argument = $this->stringifyObject($argument);
         }
-        $arg_str = json_encode(
-            $argument,
-            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
-        );
+        $arg_str = json_encode($argument, self::JSON_FLAGS);
         return str_replace('"', '"', $arg_str);
     }
 
@@ -191,27 +191,70 @@ abstract class Step implements Stringable
         }
         if (is_object($argument)) {
             try {
-                return new ReleasedArgument($this->stringifyObject($argument));
+                return new ReleasedArgument($this->releasedObjectOutput($argument));
             } catch (Throwable) {
                 return new ReleasedArgument($this->getClassName($argument));
             }
         }
         if (is_array($argument)) {
-            return $this->releaseArrayArgument($argument);
+            foreach ($argument as $key => $value) {
+                if (is_object($value)) {
+                    $argument[$key] = $this->getClassName($value);
+                } elseif (is_array($value)) {
+                    $argument[$key] = $this->releaseNestedArray($value);
+                }
+            }
         }
         return $argument;
     }
 
-    private function releaseArrayArgument(array $argument): array
+    /**
+     * Unlike stringifyObject(), doesn't call __toString(): it may be expensive or have side effects
+     * (e.g. reading a whole stream), and the test may have passed without its steps ever being printed.
+     */
+    private function releasedObjectOutput(object $argument): string
     {
-        foreach ($argument as $key => $value) {
-            if (is_object($value)) {
-                $argument[$key] = $this->getClassName($value);
-            } elseif (is_array($value)) {
-                $argument[$key] = $this->releaseArrayArgument($value);
+        if ($argument instanceof FormattedOutput) {
+            return $argument->getOutput();
+        }
+        if ($argument::class === 'Facebook\\WebDriver\\WebDriverBy') {
+            return Locator::humanReadableString($argument);
+        }
+        if ($argument instanceof Constraint) {
+            return $argument->toString();
+        }
+        return $this->getClassName($argument);
+    }
+
+    /**
+     * Objects nested in arrays are displayed as JSON, so replace them with their decoded JSON,
+     * which doesn't reference the original objects.
+     */
+    private function releaseNestedArray(array $value): mixed
+    {
+        if (!$this->containsObject($value)) {
+            return $value;
+        }
+        try {
+            return json_decode(json_encode($value, self::JSON_FLAGS | JSON_THROW_ON_ERROR), false, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            array_walk_recursive($value, function (&$item): void {
+                if (is_object($item)) {
+                    $item = $this->getClassName($item);
+                }
+            });
+            return $value;
+        }
+    }
+
+    private function containsObject(array $value): bool
+    {
+        foreach ($value as $item) {
+            if (is_object($item) || (is_array($item) && $this->containsObject($item))) {
+                return true;
             }
         }
-        return $argument;
+        return false;
     }
 
     protected function getClassName(object $argument): string

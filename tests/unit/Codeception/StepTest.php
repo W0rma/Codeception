@@ -155,21 +155,26 @@ class StepTest extends TestCase
 
     public function testReleaseArgumentsKeepsOutput()
     {
-        $stringable = new class implements Stringable {
-            public function __toString(): string
+        $constraint = Stub::makeEmpty(Constraint::class);
+        $constraint->method('toString')->willReturn('is a constraint');
+        $jsonSerializable = new class implements JsonSerializable {
+            public function jsonSerialize(): array
             {
-                return 'stringable';
+                return ['serialized' => true];
             }
         };
+        $withProperties = new stdClass();
+        $withProperties->name = 'value';
         $step = $this->getStep(['do', [
             'string',
             42,
             new stdClass(),
             function () {
             },
-            $stringable,
+            $constraint,
             new PasswordArgument('secret'),
             ['key' => new ArrayObject(), 'value' => 1],
+            ['nested' => [new stdClass(), $withProperties, $jsonSerializable, new DateTimeImmutable('2026-10-30')], 'list' => [1.0, []]],
         ]]);
         $before = $step->toString(1000);
 
@@ -183,18 +188,25 @@ class StepTest extends TestCase
             $this->assertInstanceOf(ReleasedArgument::class, $arguments[$key]);
         }
         $this->assertSame(['key' => 'ArrayObject', 'value' => 1], $arguments[6]);
+        $this->assertSame(['list' => [1.0, []]], array_diff_key($arguments[7], ['nested' => true]));
     }
 
     public function testReleaseArgumentsLetsObjectsBeCollected()
     {
         $object = new stdClass();
+        $recursive = new stdClass();
+        $recursive->self = $recursive;
         $reference = WeakReference::create($object);
-        $step = $this->getStep(['do', [$object, [$object, 'nested' => [$object]]]]);
-        unset($object);
+        $recursiveReference = WeakReference::create($recursive);
+        $step = $this->getStep(['do', [$object, [$object, 'nested' => [$object], 'recursive' => [$recursive]]]]);
+        unset($object, $recursive);
 
         $step->releaseArguments();
+        gc_collect_cycles();
 
         $this->assertNull($reference->get());
+        $this->assertNull($recursiveReference->get());
+        $this->assertSame(['stdClass'], $step->getArguments()[1]['recursive']);
     }
 
     public function testReleaseArgumentsIsIdempotent()
@@ -209,18 +221,42 @@ class StepTest extends TestCase
         $this->assertSame('do "stdClass"', $step->toString(200));
     }
 
-    public function testReleaseArgumentsFallsBackToClassNameIfStringConversionFails()
+    public function testReleaseArgumentsDoesNotConvertObjectsToString()
     {
         $argument = new class implements Stringable {
+            public bool $converted = false;
+
             public function __toString(): string
             {
-                throw new RuntimeException('cannot be converted');
+                $this->converted = true;
+                return 'stringable';
             }
         };
         $step = $this->getStep(['do', [$argument]]);
 
         $step->releaseArguments();
 
+        $this->assertFalse($argument->converted);
         $this->assertStringStartsWith('do "Stringable@anonymous', $step->toString(200));
+    }
+
+    public function testReleaseArgumentsFallsBackToClassNameIfFormattingFails()
+    {
+        $argument = new class implements FormattedOutput {
+            public function getOutput(): string
+            {
+                throw new RuntimeException('cannot be formatted');
+            }
+
+            public function __toString(): string
+            {
+                return 'formatted output';
+            }
+        };
+        $step = $this->getStep(['do', [$argument]]);
+
+        $step->releaseArguments();
+
+        $this->assertStringStartsWith('do "Codeception\\\\Step\\\\Argument\\\\FormattedOutput@anonymous', $step->toString(200));
     }
 }
