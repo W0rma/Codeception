@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Codeception\Step;
 use Codeception\Step\Argument\FormattedOutput;
+use Codeception\Step\Argument\PasswordArgument;
+use Codeception\Step\Argument\ReleasedArgument;
 use Codeception\Stub;
 use Facebook\WebDriver\WebDriverBy;
 use PHPUnit\Framework\Constraint\Constraint;
@@ -149,5 +151,76 @@ class StepTest extends TestCase
         $step = $this->getStep(['this', [$argument]]);
         $output = $step->toString(200);
         $this->assertSame('this "is a constraint"', $output);
+    }
+
+    public function testReleaseArgumentsKeepsOutput()
+    {
+        $stringable = new class implements Stringable {
+            public function __toString(): string
+            {
+                return 'stringable';
+            }
+        };
+        $step = $this->getStep(['do', [
+            'string',
+            42,
+            new stdClass(),
+            function () {
+            },
+            $stringable,
+            new PasswordArgument('secret'),
+            ['key' => new ArrayObject(), 'value' => 1],
+        ]]);
+        $before = $step->toString(1000);
+
+        $step->releaseArguments();
+
+        $this->assertSame($before, $step->toString(1000));
+        $arguments = $step->getArguments();
+        $this->assertSame('string', $arguments[0]);
+        $this->assertSame(42, $arguments[1]);
+        foreach ([2, 3, 4, 5] as $key) {
+            $this->assertInstanceOf(ReleasedArgument::class, $arguments[$key]);
+        }
+        $this->assertSame(['key' => 'ArrayObject', 'value' => 1], $arguments[6]);
+    }
+
+    public function testReleaseArgumentsLetsObjectsBeCollected()
+    {
+        $object = new stdClass();
+        $reference = WeakReference::create($object);
+        $step = $this->getStep(['do', [$object, [$object, 'nested' => [$object]]]]);
+        unset($object);
+
+        $step->releaseArguments();
+
+        $this->assertNull($reference->get());
+    }
+
+    public function testReleaseArgumentsIsIdempotent()
+    {
+        $step = $this->getStep(['do', [new stdClass()]]);
+        $step->releaseArguments();
+        $released = $step->getArguments()[0];
+
+        $step->releaseArguments();
+
+        $this->assertSame($released, $step->getArguments()[0]);
+        $this->assertSame('do "stdClass"', $step->toString(200));
+    }
+
+    public function testReleaseArgumentsFallsBackToClassNameIfStringConversionFails()
+    {
+        $argument = new class implements Stringable {
+            public function __toString(): string
+            {
+                throw new RuntimeException('cannot be converted');
+            }
+        };
+        $step = $this->getStep(['do', [$argument]]);
+
+        $step->releaseArguments();
+
+        $this->assertStringStartsWith('do "Stringable@anonymous', $step->toString(200));
     }
 }

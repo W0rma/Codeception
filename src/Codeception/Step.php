@@ -7,6 +7,7 @@ namespace Codeception;
 use Closure;
 use Codeception\Lib\ModuleContainer;
 use Codeception\Step\Argument\FormattedOutput;
+use Codeception\Step\Argument\ReleasedArgument;
 use Codeception\Step\Meta as MetaStep;
 use Codeception\Util\Locator;
 use Exception;
@@ -15,6 +16,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use ReflectionClass;
 use RuntimeException;
 use Stringable;
+use Throwable;
 
 abstract class Step implements Stringable
 {
@@ -169,6 +171,47 @@ abstract class Step implements Stringable
             return $argument->toString();
         }
         return $this->getClassName($argument);
+    }
+
+    /**
+     * Replaces object arguments with the text they are displayed as, so that the objects
+     * (and everything they reference) can be garbage collected once the test has finished.
+     *
+     * @internal
+     */
+    public function releaseArguments(): void
+    {
+        $this->arguments = array_map($this->releaseArgument(...), $this->arguments);
+    }
+
+    private function releaseArgument(mixed $argument): mixed
+    {
+        if ($argument instanceof ReleasedArgument) {
+            return $argument;
+        }
+        if (is_object($argument)) {
+            try {
+                return new ReleasedArgument($this->stringifyObject($argument));
+            } catch (Throwable) {
+                return new ReleasedArgument($this->getClassName($argument));
+            }
+        }
+        if (is_array($argument)) {
+            return $this->releaseArrayArgument($argument);
+        }
+        return $argument;
+    }
+
+    private function releaseArrayArgument(array $argument): array
+    {
+        foreach ($argument as $key => $value) {
+            if (is_object($value)) {
+                $argument[$key] = $this->getClassName($value);
+            } elseif (is_array($value)) {
+                $argument[$key] = $this->releaseArrayArgument($value);
+            }
+        }
+        return $argument;
     }
 
     protected function getClassName(object $argument): string
