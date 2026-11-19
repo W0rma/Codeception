@@ -43,7 +43,7 @@ final class GithubReleaseStrategy implements StrategyInterface
     /**
      * @var string
      */
-    private const DOWNLOAD_URL = 'https://github.com/Codeception/Codeception/releases/download/%s/%s';
+    private const DOWNLOAD_URL = 'https://github.com/W0rma/Codeception/releases/download/%s/%s';
 
     private ?string $remoteVersion = null;
 
