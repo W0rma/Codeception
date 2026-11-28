@@ -6,7 +6,11 @@ namespace Codeception\Lib;
 
 use Codeception\Exception\ConfigurationException;
 use Dotenv\Dotenv as PhpDotenv;
+use Dotenv\Repository\Adapter\ArrayAdapter;
+use Dotenv\Repository\Adapter\EnvConstAdapter;
+use Dotenv\Repository\Adapter\ServerConstAdapter;
 use Dotenv\Repository\RepositoryBuilder;
+use Dotenv\Repository\RepositoryInterface;
 use Exception;
 use SimpleXMLElement;
 use Symfony\Component\Dotenv\Dotenv as SymfonyDotenv;
@@ -22,6 +26,8 @@ use function simplexml_load_file;
 
 class ParamsLoader
 {
+    private static ?RepositoryInterface $dotEnvRepository = null;
+
     /**
      * @throws ConfigurationException
      */
@@ -131,9 +137,23 @@ class ParamsLoader
             class_exists(RepositoryBuilder::class) &&
             method_exists(RepositoryBuilder::class, 'createWithDefaultAdapters')
         ) {
-            $repository = RepositoryBuilder::createWithDefaultAdapters()->make();
-            $dotenv = PhpDotenv::create($repository, codecept_root_dir(), codecept_relative_path($file));
-            return $dotenv->load();
+            $rootDir = codecept_root_dir();
+            $relativePath = codecept_relative_path($file);
+
+            // populate the environment without overriding existing variables,
+            // the shared repository allows later .env files to override values of earlier ones
+            self::$dotEnvRepository ??= RepositoryBuilder::createWithDefaultAdapters()->immutable()->make();
+            $loaded = PhpDotenv::create(self::$dotEnvRepository, $rootDir, $relativePath)->load();
+
+            // variables which already existed in the environment were skipped, read their values from the file
+            $parser = RepositoryBuilder::createWithNoAdapters()
+                ->addReader(ServerConstAdapter::class)
+                ->addReader(EnvConstAdapter::class)
+                ->addWriter(ArrayAdapter::class)
+                ->make();
+            $values = PhpDotenv::create($parser, $rootDir, $relativePath)->load();
+
+            return array_merge($values, $loaded);
         }
 
         if (class_exists(SymfonyDotenv::class)) {
